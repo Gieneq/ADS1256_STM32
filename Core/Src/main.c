@@ -352,6 +352,7 @@ int main(void)
 //  delay_us(7);
 //  HAL_SPI_Receive(&hspi2, someinbuff, 3, HAL_MAX_DELAY);
 // asdasd
+  //komentarz 2
 //  dosth();
   while (1)
   {
