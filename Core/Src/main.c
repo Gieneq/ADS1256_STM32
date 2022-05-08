@@ -351,7 +351,7 @@ int main(void)
 //  ADS_sendCommand(ADS1256_CMD_RDATAC);
 //  delay_us(7);
 //  HAL_SPI_Receive(&hspi2, someinbuff, 3, HAL_MAX_DELAY);
-
+// asdasd
 //  dosth();
   while (1)
   {
