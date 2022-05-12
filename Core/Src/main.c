@@ -86,7 +86,7 @@ uint8_t spi_ads_rec[8];
 ////	spi_ads_data[1] = 0x003F;
 ////	spi_ads_data[2] = 0xFFFF;
 ////	spi_ads_data[3] = 0xFFFF;
-//	spi_ads_data[0] = 0xF000;
+//	spi_ads_data[0] = 0xF000;d
 //	spi_ads_data[1] = 0x000F;
 //	spi_ads_data[2] = 0xFFFF;
 //	spi_ads_data[3] = 0xFFFF;
