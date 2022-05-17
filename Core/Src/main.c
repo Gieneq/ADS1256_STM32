@@ -22,13 +22,13 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "ADS1256.h"
-
+#include <stdio.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
 
+#define BUFFSIZE 128
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -41,242 +41,41 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
-SPI_HandleTypeDef hspi2;
-DMA_HandleTypeDef hdma_spi2_rx;
-DMA_HandleTypeDef hdma_spi2_tx;
+ADC_HandleTypeDef hadc1;
+DMA_HandleTypeDef hdma_adc1;
 
-TIM_HandleTypeDef htim2;
-TIM_HandleTypeDef htim6;
+UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
+
+volatile uint16_t adc_samples[BUFFSIZE];
+volatile uint16_t junk;
+
+int __io_putchar(int ch)
+{
+  if (ch == '\n') {
+    __io_putchar('\r');
+  }
+
+  HAL_UART_Transmit(&huart2, (uint8_t*)&ch, 1, HAL_MAX_DELAY);
+
+  return 1;
+}
 
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
-static void MX_SPI2_Init(void);
+static void MX_ADC1_Init(void);
 static void MX_DMA_Init(void);
-static void MX_TIM6_Init(void);
-static void MX_TIM2_Init(void);
+static void MX_USART2_UART_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-
-uint8_t _pga = 1;
-float _VREF = 2.5;
-float _conversionFactor = 1;
-volatile int read_flag;
-float reading;
-
-//uint8_t someinbuff[3] = {0x00,0x00,0x00};
-//uint32_t other[2] = {0x80000001, 0xC0000003};
-//uint16_t something[2] = {0x0002, 0x0001};
-
-const uint8_t spi_ads_data[8] = {0xF0, 0x00, 0x00, 0x0F, 0xFF, 0xFF, 0xFF, 0xFF};
-uint8_t spi_ads_rec[8];
-
-/* USER CODE BEGIN 0 */
-
-//void fill_ADS_DATA(){
-////	spi_ads_data[0] = 0xC000;
-////	spi_ads_data[1] = 0x003F;
-////	spi_ads_data[2] = 0xFFFF;
-////	spi_ads_data[3] = 0xFFFF;
-//	spi_ads_data[0] = 0xF000;
-//	spi_ads_data[1] = 0x000F;
-//	spi_ads_data[2] = 0xFFFF;
-//	spi_ads_data[3] = 0xFFFF;
-//}
-
-void delay_us (uint16_t us) {
-	__HAL_TIM_SET_COUNTER(&htim6,0);  // set the counter value a 0
-	while (__HAL_TIM_GET_COUNTER(&htim6) < us);  // wait for the counter to reach the us input in the parameter
-}
-
-void ADS_waitDRDY() {
-	  while (HAL_GPIO_ReadPin(ADS_DDRY_GPIO_Port, ADS_DDRY_Pin));
-}
-
-void ADS_sendCommand(uint8_t reg) {
-	ADS_waitDRDY();
-	HAL_SPI_Transmit(&hspi2, &reg, 1, HAL_MAX_DELAY);
-  delay_us(1);              //  t11 delay (4*tCLKIN 4*0.13 = 0.52 us)
-}
-
-uint8_t ADS_readRegister(uint8_t reg) {
-  uint8_t readValue = 0;
-  uint8_t buff[] = {ADS1256_CMD_RREG | reg, 0};
-  HAL_SPI_Transmit(&hspi2, buff, 2, HAL_MAX_DELAY);
-  delay_us(7);              //  t6 delay (4*tCLKIN 50*0.13 = 6.5 us)
-  HAL_SPI_Receive(&hspi2, &readValue, 1, HAL_MAX_DELAY);
-  delay_us(1);              //  t11 delay (4*tCLKIN 4*0.13 = 0.52 us)
-  return readValue;
-}
-
-void ADS_writeRegister(uint8_t reg, uint8_t wdata) {
-  uint8_t buff[3] = {ADS1256_CMD_WREG | reg, 0, wdata};
-  HAL_SPI_Transmit(&hspi2, buff, 3, HAL_MAX_DELAY);
-  delay_us(1);
-}
-
-uint8_t ADS_getStatus() {
-	ADS_sendCommand(ADS1256_CMD_SDATAC);  // send out ADS1256_CMD_SDATAC command to stop continous reading mode.
-  return ADS_readRegister(ADS1256_RADD_STATUS);
-}
-
-int ADS_begin(){
-	ADS_sendCommand(ADS1256_CMD_SDATAC);
-	uint8_t status = ADS_readRegister(ADS1256_RADD_STATUS); //musi byc 0x30
-	ADS_sendCommand(ADS1256_CMD_SELFCAL);
-	ADS_waitDRDY();
-	return status;
-}
-
-int ADS_begin_drate(uint8_t drate, uint8_t gain, uint8_t buffenable) {
-  _pga = 1 << gain;
-  ADS_sendCommand(ADS1256_CMD_SDATAC);  // send out ADS1256_CMD_SDATAC command to stop continous reading mode.
-  ADS_writeRegister(ADS1256_RADD_DRATE, drate);  // write data rate register
-  uint8_t bytemask = 0x07;
-  uint8_t adcon = ADS_readRegister(ADS1256_RADD_ADCON);
-  uint8_t byte2send = (adcon & ~bytemask) | gain;
-  ADS_writeRegister(ADS1256_RADD_ADCON, byte2send);
-  uint8_t status = ADS_readRegister(ADS1256_RADD_STATUS);
-  if (buffenable) {
-	status |= (1<<0);//bitSet(status, 1);
-	ADS_writeRegister(ADS1256_RADD_STATUS, status);
-  }
-  ADS_sendCommand(ADS1256_CMD_SELFCAL);  // perform self calibration
-  ADS_waitDRDY();  // wait ADS1256 to settle after self calibration
-  return status;
-}
-
-void ADS_setChannel(uint8_t AIN_P, uint8_t AIN_N) {
-  uint8_t MUX_CHANNEL;
-  uint8_t MUXP;
-  uint8_t MUXN;
-
-  switch (AIN_P) {
-    case 0:
-      MUXP = ADS1256_MUXP_AIN0;
-      break;
-    case 1:
-      MUXP = ADS1256_MUXP_AIN1;
-      break;
-    case 2:
-      MUXP = ADS1256_MUXP_AIN2;
-      break;
-    case 3:
-      MUXP = ADS1256_MUXP_AIN3;
-      break;
-    case 4:
-      MUXP = ADS1256_MUXP_AIN4;
-      break;
-    case 5:
-      MUXP = ADS1256_MUXP_AIN5;
-      break;
-    case 6:
-      MUXP = ADS1256_MUXP_AIN6;
-      break;
-    case 7:
-      MUXP = ADS1256_MUXP_AIN7;
-      break;
-    default:
-      MUXP = ADS1256_MUXP_AINCOM;
-  }
-
-  switch (AIN_N) {
-    case 0:
-      MUXN = ADS1256_MUXN_AIN0;
-      break;
-    case 1:
-      MUXN = ADS1256_MUXN_AIN1;
-      break;
-    case 2:
-      MUXN = ADS1256_MUXN_AIN2;
-      break;
-    case 3:
-      MUXN = ADS1256_MUXN_AIN3;
-      break;
-    case 4:
-      MUXN = ADS1256_MUXN_AIN4;
-      break;
-    case 5:
-      MUXN = ADS1256_MUXN_AIN5;
-      break;
-    case 6:
-      MUXN = ADS1256_MUXN_AIN6;
-      break;
-    case 7:
-      MUXN = ADS1256_MUXN_AIN7;
-      break;
-    default:
-      MUXN = ADS1256_MUXN_AINCOM;
-  }
-
-  MUX_CHANNEL = MUXP | MUXN;
-
-  ADS_writeRegister(ADS1256_RADD_MUX, MUX_CHANNEL);
-  ADS_sendCommand(ADS1256_CMD_SYNC);
-  ADS_sendCommand(ADS1256_CMD_WAKEUP);
-}
-
-void ADS_setPChannel(uint8_t channel) { ADS_setChannel(channel, -1); }
-
-
-void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
-{
-
-}
-
-//void HAL_SPI_IRQHandler(SPI_HandleTypeDef *hspi);
-//void HAL_SPI_TxCpltCallback(SPI_HandleTypeDef *hspi);
-//void HAL_SPI_RxCpltCallback(SPI_HandleTypeDef *hspi);
-//void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi);
-//void HAL_SPI_TxHalfCpltCallback(SPI_HandleTypeDef *hspi);
-//void HAL_SPI_RxHalfCpltCallback(SPI_HandleTypeDef *hspi);
-//void HAL_SPI_TxRxHalfCpltCallback(SPI_HandleTypeDef *hspi);
-//void HAL_SPI_ErrorCallback(SPI_HandleTypeDef *hspi);
-//void HAL_SPI_AbortCpltCallback(SPI_HandleTypeDef *hspi);
-
-
-void HAL_SPI_TxCpltCallback(SPI_HandleTypeDef *hspi)
-{
-	if (hspi == &hspi2)
-	{
-	}
-}
-
-void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi)
-{
-	if (hspi == &hspi2)
-	{
-//		other[0] = 0x80000001;
-//		other[1] = 0xC0000003;
-	}
-}
-
-void HAL_SPI_TxRxHalfCpltCallback(SPI_HandleTypeDef *hspi)
-{
-	if (hspi == &hspi2)
-	{
-	}
-}
-
-
-
-void dosth() {
-	while(HAL_SPI_GetState(&hspi2) == HAL_SPI_STATE_BUSY);
-
-	while(HAL_GPIO_ReadPin(ADS_DDRY_GPIO_Port, ADS_DDRY_Pin));
-	while(!HAL_GPIO_ReadPin(ADS_DDRY_GPIO_Port, ADS_DDRY_Pin));
-	while(HAL_GPIO_ReadPin(ADS_DDRY_GPIO_Port, ADS_DDRY_Pin));
-	HAL_SPI_TransmitReceive_DMA(&hspi2, spi_ads_data, spi_ads_rec, 8);
-
-}
 
 /* USER CODE END 0 */
 
@@ -305,58 +104,70 @@ int main(void)
   SystemClock_Config();
 
   /* USER CODE BEGIN SysInit */
-  MX_DMA_Init();
-  #define MX_DMA_Init() do {} while(0)
+//  MX_DMA_Init();
+//  #define MX_DMA_Init() do {} while(0)
   /* USER CODE END SysInit */
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
-  MX_SPI2_Init();
+  MX_ADC1_Init();
   MX_DMA_Init();
-  MX_TIM6_Init();
-  MX_TIM2_Init();
+  MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
-	#undef MX_DMA_Init
+//	#undef MX_DMA_Init
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
 
-  HAL_TIM_Base_Start(&htim6);
-  HAL_TIM_Base_Start(&htim2);
-  HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1);
-  HAL_Delay(100);
 
-  HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, GPIO_PIN_RESET);
-
-  HAL_Delay(1);
-  HAL_GPIO_WritePin(ADS_RST_GPIO_Port, ADS_RST_Pin, GPIO_PIN_RESET);
-  HAL_Delay(1);
-  HAL_GPIO_WritePin(ADS_RST_GPIO_Port, ADS_RST_Pin, GPIO_PIN_SET);
-  HAL_Delay(1);
-
-  int aw = ADS_getStatus();
-
-  if(aw == 0x30)
-	  HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, GPIO_PIN_SET);
-  else
-	  HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, GPIO_PIN_RESET);
+//  long lastTime = HAL_GetTick();
+//  const int ELAPSE_TIME = 1000;
+//  int counter = 0;
 //
-////  ADS_begin_drate(ADS1256_DRATE_500SPS, ADS1256_GAIN_1, 0);
-////  ADS_begin_drate(ADS1256_DRATE_5SPS, ADS1256_GAIN_1, 0);
-  ADS_begin_drate(ADS1256_DRATE_30000SPS, ADS1256_GAIN_1, 0);
-////  ADS_begin_drate(ADS1256_DRATE_15000SPS, ADS1256_GAIN_1, 0);
-  ADS_setPChannel(7);
+//  HAL_ADCEx_Calibration_Start(&hadc1, ADC_SINGLE_ENDED);
+//  HAL_ADC_Start_DMA(&hadc1, (uint32_t*)&junk, BUFFSIZE);
+
+//  volatile static uint16_t value[2];
 //
-//  ADS_sendCommand(ADS1256_CMD_RDATAC);
-//  delay_us(7);
-//  HAL_SPI_Receive(&hspi2, someinbuff, 3, HAL_MAX_DELAY);
-// asdasd
-  //komentarz 2
-//  dosth();
+//  HAL_ADCEx_Calibration_Start(&hadc1, ADC_SINGLE_ENDED);
+//  HAL_ADC_Start_DMA(&hadc1, (uint32_t*)value, 2);
+
+//  HAL_ADC_Start(&hadc1);
+  volatile static uint16_t value[2];
+
+  HAL_ADCEx_Calibration_Start(&hadc1, ADC_SINGLE_ENDED);
+  HAL_ADC_Start_DMA(&hadc1, (uint32_t*)value, 2);
+
   while (1)
   {
-	  aw = ADS_getStatus();
+//    printf("value1=%u, value2=%u\n", value[0], value[1]);
+
+    HAL_Delay(250);
+
+//		  float f_Hz = counter*1000.0/ELAPSE_TIME;
+//		  printf("F = %lu Hz, val: %u, %u, %u, %u.\n", (uint32_t)(f_Hz), adc_samples[0], adc_samples[1], adc_samples[2], adc_samples[3]);
+//		  lastTime = HAL_GetTick();
+//		  counter = 0;
+//	  }
+//	  counter++;
+
+//	  printf("value1=%u, value2=%u\n", value[0], value[1]);
+//
+//	  HAL_Delay(250);
+
+//	  uint32_t value = junk;//HAL_ADC_GetValue(&hadc1);
+//	  float voltage = 3.3f * value / 4096.0f;
+//	  printf("ADC = %lu (%.3f V)\n", value, voltage);
+//
+//	  HAL_Delay(250);
+
+//	  HAL_ADC_PollForConversion(&hadc1, HAL_MAX_DELAY);
+
+//	  value = HAL_ADC_GetValue(&hadc1);
+//	  printf("ADC = %lu\n", value);
+
+//	  HAL_Delay(10);
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -413,139 +224,110 @@ void SystemClock_Config(void)
 }
 
 /**
-  * @brief SPI2 Initialization Function
+  * @brief ADC1 Initialization Function
   * @param None
   * @retval None
   */
-static void MX_SPI2_Init(void)
+static void MX_ADC1_Init(void)
 {
 
-  /* USER CODE BEGIN SPI2_Init 0 */
+  /* USER CODE BEGIN ADC1_Init 0 */
 
-  /* USER CODE END SPI2_Init 0 */
+  /* USER CODE END ADC1_Init 0 */
 
-  /* USER CODE BEGIN SPI2_Init 1 */
+  ADC_MultiModeTypeDef multimode = {0};
+  ADC_ChannelConfTypeDef sConfig = {0};
 
-  /* USER CODE END SPI2_Init 1 */
-  /* SPI2 parameter configuration*/
-  hspi2.Instance = SPI2;
-  hspi2.Init.Mode = SPI_MODE_MASTER;
-  hspi2.Init.Direction = SPI_DIRECTION_2LINES;
-  hspi2.Init.DataSize = SPI_DATASIZE_8BIT;
-  hspi2.Init.CLKPolarity = SPI_POLARITY_LOW;
-  hspi2.Init.CLKPhase = SPI_PHASE_2EDGE;
-  hspi2.Init.NSS = SPI_NSS_HARD_OUTPUT;
-  hspi2.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_128;
-  hspi2.Init.FirstBit = SPI_FIRSTBIT_MSB;
-  hspi2.Init.TIMode = SPI_TIMODE_DISABLE;
-  hspi2.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
-  hspi2.Init.CRCPolynomial = 7;
-  hspi2.Init.CRCLength = SPI_CRC_LENGTH_DATASIZE;
-  hspi2.Init.NSSPMode = SPI_NSS_PULSE_DISABLE;
-  if (HAL_SPI_Init(&hspi2) != HAL_OK)
+  /* USER CODE BEGIN ADC1_Init 1 */
+
+  /* USER CODE END ADC1_Init 1 */
+  /** Common config
+  */
+  hadc1.Instance = ADC1;
+  hadc1.Init.ClockPrescaler = ADC_CLOCK_ASYNC_DIV1;
+  hadc1.Init.Resolution = ADC_RESOLUTION_12B;
+  hadc1.Init.DataAlign = ADC_DATAALIGN_RIGHT;
+  hadc1.Init.ScanConvMode = ADC_SCAN_ENABLE;
+  hadc1.Init.EOCSelection = ADC_EOC_SINGLE_CONV;
+  hadc1.Init.LowPowerAutoWait = DISABLE;
+  hadc1.Init.ContinuousConvMode = ENABLE;
+  hadc1.Init.NbrOfConversion = 2;
+  hadc1.Init.DiscontinuousConvMode = DISABLE;
+  hadc1.Init.ExternalTrigConv = ADC_SOFTWARE_START;
+  hadc1.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_NONE;
+  hadc1.Init.DMAContinuousRequests = ENABLE;
+  hadc1.Init.Overrun = ADC_OVR_DATA_OVERWRITTEN;
+  hadc1.Init.OversamplingMode = DISABLE;
+  if (HAL_ADC_Init(&hadc1) != HAL_OK)
   {
     Error_Handler();
   }
-  /* USER CODE BEGIN SPI2_Init 2 */
+  /** Configure the ADC multi-mode
+  */
+  multimode.Mode = ADC_MODE_INDEPENDENT;
+  if (HAL_ADCEx_MultiModeConfigChannel(&hadc1, &multimode) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /** Configure Regular Channel
+  */
+  sConfig.Channel = ADC_CHANNEL_1;
+  sConfig.Rank = ADC_REGULAR_RANK_1;
+  sConfig.SamplingTime = ADC_SAMPLETIME_640CYCLES_5;
+  sConfig.SingleDiff = ADC_SINGLE_ENDED;
+  sConfig.OffsetNumber = ADC_OFFSET_NONE;
+  sConfig.Offset = 1;
+  if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /** Configure Regular Channel
+  */
+  sConfig.Channel = ADC_CHANNEL_2;
+  sConfig.Rank = ADC_REGULAR_RANK_2;
+  sConfig.Offset = 0;
+  if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN ADC1_Init 2 */
 
-  /* USER CODE END SPI2_Init 2 */
+  /* USER CODE END ADC1_Init 2 */
 
 }
 
 /**
-  * @brief TIM2 Initialization Function
+  * @brief USART2 Initialization Function
   * @param None
   * @retval None
   */
-static void MX_TIM2_Init(void)
+static void MX_USART2_UART_Init(void)
 {
 
-  /* USER CODE BEGIN TIM2_Init 0 */
+  /* USER CODE BEGIN USART2_Init 0 */
 
-  /* USER CODE END TIM2_Init 0 */
+  /* USER CODE END USART2_Init 0 */
 
-  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
-  TIM_MasterConfigTypeDef sMasterConfig = {0};
-  TIM_OC_InitTypeDef sConfigOC = {0};
+  /* USER CODE BEGIN USART2_Init 1 */
 
-  /* USER CODE BEGIN TIM2_Init 1 */
-
-  /* USER CODE END TIM2_Init 1 */
-  htim2.Instance = TIM2;
-  htim2.Init.Prescaler = 8-1;
-  htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim2.Init.Period = 8-1;
-  htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-  htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-  if (HAL_TIM_Base_Init(&htim2) != HAL_OK)
+  /* USER CODE END USART2_Init 1 */
+  huart2.Instance = USART2;
+  huart2.Init.BaudRate = 115200;
+  huart2.Init.WordLength = UART_WORDLENGTH_8B;
+  huart2.Init.StopBits = UART_STOPBITS_1;
+  huart2.Init.Parity = UART_PARITY_NONE;
+  huart2.Init.Mode = UART_MODE_TX_RX;
+  huart2.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart2.Init.OverSampling = UART_OVERSAMPLING_16;
+  huart2.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
+  huart2.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
+  if (HAL_UART_Init(&huart2) != HAL_OK)
   {
     Error_Handler();
   }
-  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
-  if (HAL_TIM_ConfigClockSource(&htim2, &sClockSourceConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  if (HAL_TIM_PWM_Init(&htim2) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
-  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
-  if (HAL_TIMEx_MasterConfigSynchronization(&htim2, &sMasterConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  sConfigOC.OCMode = TIM_OCMODE_PWM1;
-  sConfigOC.Pulse = 5-1;
-  sConfigOC.OCPolarity = TIM_OCPOLARITY_LOW;
-  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
-  if (HAL_TIM_PWM_ConfigChannel(&htim2, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN TIM2_Init 2 */
+  /* USER CODE BEGIN USART2_Init 2 */
 
-  /* USER CODE END TIM2_Init 2 */
-  HAL_TIM_MspPostInit(&htim2);
-
-}
-
-/**
-  * @brief TIM6 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_TIM6_Init(void)
-{
-
-  /* USER CODE BEGIN TIM6_Init 0 */
-
-  /* USER CODE END TIM6_Init 0 */
-
-  TIM_MasterConfigTypeDef sMasterConfig = {0};
-
-  /* USER CODE BEGIN TIM6_Init 1 */
-
-  /* USER CODE END TIM6_Init 1 */
-  htim6.Instance = TIM6;
-  htim6.Init.Prescaler = 0;
-  htim6.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim6.Init.Period = 65535;
-  htim6.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-  if (HAL_TIM_Base_Init(&htim6) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
-  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
-  if (HAL_TIMEx_MasterConfigSynchronization(&htim6, &sMasterConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN TIM6_Init 2 */
-
-  /* USER CODE END TIM6_Init 2 */
+  /* USER CODE END USART2_Init 2 */
 
 }
 
@@ -559,12 +341,9 @@ static void MX_DMA_Init(void)
   __HAL_RCC_DMA1_CLK_ENABLE();
 
   /* DMA interrupt init */
-  /* DMA1_Channel4_IRQn interrupt configuration */
-  HAL_NVIC_SetPriority(DMA1_Channel4_IRQn, 6, 0);
-  HAL_NVIC_EnableIRQ(DMA1_Channel4_IRQn);
-  /* DMA1_Channel5_IRQn interrupt configuration */
-  HAL_NVIC_SetPriority(DMA1_Channel5_IRQn, 6, 0);
-  HAL_NVIC_EnableIRQ(DMA1_Channel5_IRQn);
+  /* DMA1_Channel1_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA1_Channel1_IRQn, 2, 0);
+  HAL_NVIC_EnableIRQ(DMA1_Channel1_IRQn);
 
 }
 
@@ -580,47 +359,16 @@ static void MX_GPIO_Init(void)
   /* GPIO Ports Clock Enable */
   __HAL_RCC_GPIOC_CLK_ENABLE();
   __HAL_RCC_GPIOA_CLK_ENABLE();
-  __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(ADS_CS_GPIO_Port, ADS_CS_Pin, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, GPIO_PIN_RESET);
 
-  /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOA, LED_Pin|LD2_Pin, GPIO_PIN_RESET);
-
-  /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(ADS_RST_GPIO_Port, ADS_RST_Pin, GPIO_PIN_SET);
-
-  /*Configure GPIO pin : ADS_CS_Pin */
-  GPIO_InitStruct.Pin = ADS_CS_Pin;
+  /*Configure GPIO pin : LED_Pin */
+  GPIO_InitStruct.Pin = LED_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(ADS_CS_GPIO_Port, &GPIO_InitStruct);
-
-  /*Configure GPIO pins : LED_Pin LD2_Pin */
-  GPIO_InitStruct.Pin = LED_Pin|LD2_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
-
-  /*Configure GPIO pin : ADS_RST_Pin */
-  GPIO_InitStruct.Pin = ADS_RST_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(ADS_RST_GPIO_Port, &GPIO_InitStruct);
-
-  /*Configure GPIO pin : ADS_DDRY_Pin */
-  GPIO_InitStruct.Pin = ADS_DDRY_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(ADS_DDRY_GPIO_Port, &GPIO_InitStruct);
-
-  /* EXTI interrupt init*/
-  HAL_NVIC_SetPriority(EXTI15_10_IRQn, 0, 0);
-  HAL_NVIC_EnableIRQ(EXTI15_10_IRQn);
+  HAL_GPIO_Init(LED_GPIO_Port, &GPIO_InitStruct);
 
 }
 
